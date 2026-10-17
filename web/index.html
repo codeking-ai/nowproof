@@ -30,9 +30,9 @@
   <section class="view" id="view-home">
     <div class="hero">
       <div class="hero-text">
-        <span class="eyebrow">可信视频存证 · Powered by Monad</span>
+        <span class="eyebrow">可信影像存证 · Powered by Monad</span>
         <h1>每一秒，<br>都有区块为证。</h1>
-        <p class="lead">NowProof 在拍摄的同时，把视频逐段锚定到 Monad 区块。每一段画面的诞生时间被锁定在数秒之内，任何剪辑与替换都会被精确识别。</p>
+        <p class="lead">NowProof 在拍摄的同时，把照片与视频锚定到 Monad 区块。每一帧画面的诞生时间被锁定在数秒之内，任何修图、剪辑与替换都会被精确识别。</p>
         <div class="cta">
           <a class="btn primary lg" href="#/capture">开始存证</a>
           <a class="btn lg" href="#/records">验证视频</a>
@@ -54,17 +54,17 @@
 
     <h2 class="sec">适用场景</h2>
     <div class="scenes">
-      <a class="scene" href="#/capture?s=car"><span class="ic">🚗</span><b>车险理赔</b><small>事故现场一键存证，理赔材料可直接验真</small></a>
-      <a class="scene" href="#/capture?s=parcel"><span class="ic">📦</span><b>签收验货</b><small>快递签收、开箱验货全程留痕</small></a>
+      <a class="scene" href="#/capture?s=car&m=photo"><span class="ic">🚗</span><b>车险理赔</b><small>事故现场拍照存证，定损材料可直接验真</small></a>
+      <a class="scene" href="#/capture?s=parcel&m=photo"><span class="ic">📦</span><b>签收打卡</b><small>送达签收、巡检打卡，水印时间不可伪造</small></a>
       <a class="scene" href="#/capture?s=trade"><span class="ic">🔍</span><b>二手交易</b><small>商品实拍视频，买卖双方共同信任</small></a>
       <a class="scene" href="#/capture?s=kyc"><span class="ic">🧑‍💼</span><b>远程面签</b><small>真人挑战模式，抵御换脸冒充</small></a>
     </div>
 
     <h2 class="sec">如何保证可信</h2>
     <div class="pillars">
-      <div class="pillar"><span class="num">01</span><b>不早于</b><p>拍摄画面实时烧录最新区块号与哈希，区块哈希无法预知。</p></div>
-      <div class="pillar"><span class="num">02</span><b>不晚于</b><p>每 0.4 秒的视频指纹立即写入下一个区块，此后无法更改。</p></div>
-      <div class="pillar"><span class="num">03</span><b>可验证</b><p>任何人持有视频即可逐段核验，篡改位置精确到秒。</p></div>
+      <div class="pillar"><span class="num">01</span><b>不早于</b><p>画面实时烧录最新区块号与哈希，区块哈希无法预知。</p></div>
+      <div class="pillar"><span class="num">02</span><b>不晚于</b><p>照片指纹、每 0.4 秒的视频指纹立即写入下一个区块，此后无法更改。</p></div>
+      <div class="pillar"><span class="num">03</span><b>可验证</b><p>任何人持有原件即可核验，视频篡改位置精确到 0.4 秒。</p></div>
     </div>
     <p class="more"><a href="#/about">技术原理与安全模型 →</a></p>
   </section>
@@ -78,20 +78,24 @@
           <div class="stage-empty" id="camEmpty">
             <button class="btn primary lg" id="btnCam">打开相机</button>
           </div>
+          <div class="flash" id="flash"></div>
           <div class="rec-badge" id="recBadge" hidden><i></i><span id="recTime">00:00.0</span></div>
           <div class="live-meter" id="liveMeter" hidden><span id="lmOk">0</span> 段已锚定 · 时间窗 <span id="lmWin">—</span></div>
         </div>
         <div class="shutter-bar">
           <div class="chips" id="sceneChips"></div>
           <button class="shutter" id="btnShutter" disabled aria-label="开始/停止存证"><span></span></button>
-          <label class="switch"><input type="checkbox" id="chkChallenge"><span class="sl"></span>真人挑战</label>
+          <div class="cap-opts">
+            <div class="seg" id="modeSeg"><button data-m="video" class="on">视频</button><button data-m="photo">照片</button></div>
+            <label class="switch"><input type="checkbox" id="chkChallenge"><span class="sl"></span>真人挑战</label>
+          </div>
         </div>
       </div>
 
       <aside class="cap-side">
         <div class="card" id="capInfo">
           <div class="kv"><span>存证编号</span><code id="sSession">—</code></div>
-          <div class="kv"><span>已锚定片段</span><code id="sOk">0</code></div>
+          <div class="kv"><span>已锚定</span><code id="sOk">0</code></div>
           <div class="kv"><span>平均时间窗</span><code id="sWin">—</code></div>
           <div class="kv"><span>存证账户</span><code id="wAddr">—</code></div>
           <div class="kv"><span>账户余额</span><code id="wBal">—</code></div>
@@ -101,7 +105,7 @@
           <b>存证完成</b>
           <p id="doneText"></p>
           <a class="btn primary" id="btnViewCert">查看存证证书</a>
-          <a class="btn" id="dlLink" download>下载视频</a>
+          <a class="btn" id="dlLink" download>下载原件</a>
         </div>
       </aside>
     </div>
@@ -153,15 +157,15 @@
     </div>
 
     <div class="card verify-box">
-      <div class="vb-text"><b>核验视频</b><span id="vbHint">选择与本证书对应的视频文件</span></div>
-      <label class="btn"><input type="file" id="vFile" accept="video/webm,video/*" hidden>选择文件</label>
+      <div class="vb-text"><b>核验原件</b><span id="vbHint">选择与本证书对应的原始文件</span></div>
+      <label class="btn"><input type="file" id="vFile" accept="video/webm,video/*,image/jpeg,image/*" hidden>选择文件</label>
       <button class="btn primary" id="btnVerify" disabled>开始核验</button>
     </div>
 
     <div class="verdict" id="verdict" hidden></div>
 
     <div class="vgrid" id="vResult" hidden>
-      <div class="stage"><video id="vPlayer" controls playsinline muted></video></div>
+      <div class="stage"><video id="vPlayer" controls playsinline muted></video><img id="vImage" alt="存证照片" hidden></div>
       <aside class="card seginfo" id="segInfo"></aside>
     </div>
 
@@ -179,7 +183,7 @@
   <section class="view" id="view-about">
     <div class="doc">
       <h1>技术原理</h1>
-      <p>NowProof 用两个区块把每一段视频「夹」在中间，形成双向时间边界。</p>
+      <p>NowProof 用两个区块把每一张照片、每一段视频「夹」在中间，形成双向时间边界。</p>
       <svg viewBox="0 0 760 210" class="diagram" role="img" aria-label="时间夹心">
         <defs><marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" class="fillfg"/></marker></defs>
         <line x1="20" y1="180" x2="740" y2="180" class="axis" marker-end="url(#ar)"/>
@@ -202,6 +206,9 @@
         <div class="bar"><span>典型 L2 · 2s</span><div class="track"><i style="width:22%" class="l2"></i></div><code>4–8s</code></div>
         <div class="bar"><span>Monad · 0.4s</span><div class="track"><i style="width:8%" class="mon"></i></div><code>2–3s</code></div>
       </div>
+
+      <h2>照片存证</h2>
+      <p>拍照瞬间的画面烧录当前区块，照片指纹随即锚定上链，形成与视频相同的双向时间边界。照片须以原始文件核验，经社交软件压缩后的副本指纹会改变。</p>
 
       <h2>真人挑战</h2>
       <p>开启后，画面每 3 秒出现一个由最新区块哈希派生的动作指令。指令无法预知，核验时可逐段复算并比对视频中的反应。</p>

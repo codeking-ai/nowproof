@@ -51,6 +51,24 @@ await page.waitForFunction(() => /verdict bad/.test(document.getElementById('ver
 console.log('tamper:', await text('#verdict'));
 await page.screenshot({ path: '.tmp/tamper.png', fullPage: true });
 
+// photo flow
+await page.goto(base + '#/capture?s=car&m=photo');
+await page.waitForFunction(() => document.querySelector('#modeSeg .on').dataset.m === 'photo');
+await page.waitForTimeout(4000);                       // session is pre-opened in the background
+await page.click('#btnShutter');
+await page.waitForFunction(() => document.getElementById('doneText').textContent.includes('照片已锚定'), null, { timeout: 60000 });
+console.log('photo done:', await text('#doneText'));
+await page.screenshot({ path: '.tmp/photo-capture.png' });
+await page.click('#btnViewCert');
+await page.waitForFunction(() => /verdict (ok|bad)/.test(document.getElementById('verdict').className), null, { timeout: 60000 });
+console.log('photo cert:', await text('#certNo'), '|', await text('#cScene'), '|', await text('#cSegs'), '|', await text('#cWin'));
+console.log('photo verify:', await text('#verdict'));
+await page.screenshot({ path: '.tmp/photo-cert.png', fullPage: true });
+await page.click('#btnTamper');
+await page.waitForFunction(() => /verdict bad/.test(document.getElementById('verdict').className), null, { timeout: 30000 });
+console.log('photo tamper:', await text('#verdict'));
+await page.screenshot({ path: '.tmp/photo-tamper.png', fullPage: true });
+
 await page.goto(base + '#/records');
 await page.waitForTimeout(500);
 console.log('records:', await page.locator('.rec-item').count(), 'items');

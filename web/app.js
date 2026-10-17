@@ -16,7 +16,7 @@ const CH_BUCKET = 8n;          // challenge rotates every 8 blocks (~3.2s)
 const SCENES = {
   general: { name: '通用存证', ic: '🎥' },
   car: { name: '车险理赔', ic: '🚗' },
-  parcel: { name: '签收验货', ic: '📦' },
+  parcel: { name: '签收打卡', ic: '📦' },
   trade: { name: '二手交易', ic: '🔍' },
   kyc: { name: '远程面签', ic: '🧑‍💼' },
 };
@@ -74,7 +74,7 @@ function route() {
   document.querySelectorAll('.nav a').forEach(a => a.classList.toggle('active', a.dataset.route === r.name));
   window.scrollTo(0, 0);
   if (r.name === 'home') refreshSessionCount();
-  if (r.name === 'capture') enterCapture(r.q.get('s'));
+  if (r.name === 'capture') enterCapture(r.q.get('s'), r.q.get('m'));
   if (r.name === 'records') renderRecords();
   if (r.name === 'proof') openProof(r.arg);
 }
@@ -196,16 +196,47 @@ function renderChips() {
     $('sceneChips').appendChild(b);
   }
 }
-function enterCapture(s) {
+function enterCapture(s, m) {
   if (s && SCENES[s] && !rec) { scene = s; $('chkChallenge').checked = s === 'kyc'; }
   renderChips();
+  setMode(m === 'photo' ? 'photo' : (s ? 'video' : mode));
   ensureFunds();
+}
+
+// Capture mode: 'video' (one anchor per 0.4s segment) or 'photo' (one anchor per shot).
+let mode = 'video';
+function setMode(m) {
+  if (rec || shooting) return;
+  mode = m;
+  document.querySelectorAll('#modeSeg button').forEach(b => b.classList.toggle('on', b.dataset.m === m));
+  $('btnShutter').classList.toggle('photo', m === 'photo');
+  if (m === 'photo' && source) prepareSession();
+}
+document.querySelectorAll('#modeSeg button').forEach(b => b.onclick = () => setMode(b.dataset.m));
+
+// Photo sessions are opened ahead of the shot, so the shutter only has to send one anchor tx
+// and the watermark can already carry the certificate number.
+let prepared = null, shooting = false;
+function prepareSession() {
+  const c = $('chkChallenge').checked;
+  if (prepared && prepared.c === c) return prepared.p;
+  const entry = { c, id: null };
+  entry.p = (async () => {
+    if (!(await ensureFunds())) throw new Error('funds');
+    const hash = await sendTx(encodeFunctionData({ abi, functionName: 'start', args: [JSON.stringify({ v: 1, c: c ? 1 : 0, m: 'p' })] }), GAS_START);
+    const rc = await pub.waitForTransactionReceipt({ hash, pollingInterval: 250 });
+    entry.id = parseEventLogs({ abi, logs: rc.logs, eventName: 'SessionStarted' })[0].args.id;
+    return entry.id;
+  })();
+  entry.p.catch(() => { if (prepared === entry) prepared = null; });
+  prepared = entry;
+  return entry.p;
 }
 
 const canvas = $('cam'), ctx = canvas.getContext('2d');
 const video = document.createElement('video');
 video.muted = true; video.playsInline = true;
-let source = null, rec = null, drawnMin = null;
+let source = null, rec = null, drawnMin = null, lastDrawn = null;
 
 async function startCamera() {
   try {
@@ -221,6 +252,7 @@ async function startCamera() {
   $('camEmpty').hidden = true;
   $('btnShutter').disabled = false;
   requestAnimationFrame(draw);
+  if (mode === 'photo') prepareSession();
 }
 $('btnCam').onclick = startCamera;
 
@@ -263,6 +295,7 @@ function draw(t) {
   ctx.fillStyle = '#836ef9'; ctx.fillRect(0, H - band, 6, band);
   if (head) {
     if (rec && (!drawnMin || head.number < drawnMin.number)) drawnMin = { number: head.number, hash: head.hash };
+    lastDrawn = { number: head.number, hash: head.hash };
     ctx.fillStyle = '#ffd166'; ctx.font = `700 ${Math.round(band * 0.36)}px ui-monospace,Consolas,monospace`;
     ctx.fillText(`MONAD #${head.number}`, pad + 6, H - band + band * 0.45);
     ctx.fillStyle = '#ecebf5'; ctx.font = `500 ${Math.round(band * 0.24)}px ui-monospace,Consolas,monospace`;
@@ -274,7 +307,9 @@ function draw(t) {
   ctx.fillStyle = '#ecebf5'; ctx.font = `600 ${Math.round(band * 0.26)}px ui-monospace,Consolas,monospace`;
   ctx.fillText(ts, W - pad, H - band + band * 0.45);
   ctx.fillStyle = '#9a98b3'; ctx.font = `500 ${Math.round(band * 0.2)}px system-ui`;
-  ctx.fillText(rec?.id ? `NowProof · ${certNo(rec.id)} · #${rec.seq}` : `NowProof · ${SCENES[scene].name}`, W - pad, H - band + band * 0.8);
+  const tagline = rec?.id ? `NowProof · ${certNo(rec.id)} · #${rec.seq}`
+    : mode === 'photo' && prepared?.id ? `NowProof · ${certNo(prepared.id)}` : `NowProof · ${SCENES[scene].name}`;
+  ctx.fillText(tagline, W - pad, H - band + band * 0.8);
   ctx.textAlign = 'left';
 
   if ($('chkChallenge').checked && challenge) {
@@ -296,7 +331,7 @@ function draw(t) {
   }
   requestAnimationFrame(draw);
 }
-$('chkChallenge').onchange = () => { challenge = null; updateChallenge(); };
+$('chkChallenge').onchange = () => { challenge = null; updateChallenge(); if (mode === 'photo' && source && !shooting) prepareSession(); };
 
 // ---------------------------------------------------------------- recording
 const feedRows = new Map();
@@ -403,7 +438,50 @@ function stopRecording() {
   rec.mr.stop();
   $('recBadge').hidden = true;
 }
-$('btnShutter').onclick = () => (rec && !rec.stopped ? stopRecording() : startRecording());
+$('btnShutter').onclick = () => mode === 'photo' ? takePhoto() : (rec && !rec.stopped ? stopRecording() : startRecording());
+
+async function takePhoto() {
+  if (shooting) return;
+  if (!head) return toast('正在连接网络，请稍候');
+  shooting = true; $('btnShutter').disabled = true;
+  $('doneBox').hidden = true;
+  const withChallenge = $('chkChallenge').checked;
+  try {
+    const id = await prepareSession();
+    await new Promise(r => requestAnimationFrame(r));     // runs right after draw(): canvas and lastDrawn agree
+    const seen = lastDrawn;
+    const snap = document.createElement('canvas');
+    snap.width = canvas.width; snap.height = canvas.height;
+    snap.getContext('2d').drawImage(canvas, 0, 0);
+    $('flash').classList.remove('go'); void $('flash').offsetWidth; $('flash').classList.add('go');
+    prepared = null;
+    const blob = await new Promise(r => snap.toBlob(r, 'image/jpeg', 0.92));
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    const hash = keccak256(bytes);
+    $('sSession').textContent = certNo(id);
+    $('feed').innerHTML = '<div class="ln hd"><span>片段</span><span class="sz">大小</span><span class="h">指纹</span><span>区块</span><span class="st">状态</span></div>';
+    feedRows.clear(); feedRow(0, bytes.length, hash, seen.number);
+    const tx = await sendTx(encodeFunctionData({ abi, functionName: 'anchor', args: [id, 0, hash, 0n, bytes.length, seen.number, seen.hash] }), GAS_ANCHOR);
+    setRow(0, 'pend', '确认中');
+    const rc = await pub.waitForTransactionReceipt({ hash: tx, pollingInterval: 250 });
+    if (rc.status !== 'success') throw new Error('reverted');
+    const a = parseEventLogs({ abi, logs: rc.logs, eventName: 'Anchored' })[0].args;
+    const win = Number(a.anchorBlock - a.seenBlock) * 0.4;
+    setRow(0, 'ok', `✓ ${win.toFixed(1)}s`, `#${a.seenBlock} → #${a.anchorBlock}`);
+    $('sOk').textContent = '1 张照片'; $('sWin').textContent = `${win.toFixed(1)}s`;
+    await saveVideo(id, blob);
+    const list = store.get('nowproof_records', []);
+    list.unshift({ id: String(id), scene, challenge: withChallenge, kind: 'photo', at: Date.now(), segs: 1, ok: 1, win: +win.toFixed(1), size: blob.size });
+    store.set('nowproof_records', list.slice(0, 100));
+    $('doneText').textContent = `${certNo(id)} · 照片已锚定 · 时间窗 ${win.toFixed(1)}s`;
+    $('btnViewCert').href = `#/proof/${id}`;
+    $('dlLink').href = URL.createObjectURL(blob); $('dlLink').download = `nowproof-${certNo(id)}.jpg`;
+    $('doneBox').hidden = false;
+    refreshBalance();
+  } catch { setRow(0, 'bad', '✗ 未上链'); toast('拍照存证失败，请重试'); }
+  shooting = false; $('btnShutter').disabled = false;
+  if (mode === 'photo') prepareSession();
+}
 
 async function finishRecording() {
   const r = rec;
@@ -436,7 +514,7 @@ function renderRecords() {
     const a = document.createElement('a');
     a.className = 'rec-item'; a.href = `#/proof/${r.id}`;
     a.innerHTML = `<span class="ic">${s.ic}</span>
-      <div><b>${s.name}${r.challenge ? ' · 真人挑战' : ''}</b><small>${new Date(r.at).toLocaleString('zh-CN', { hour12: false })} · ${(r.segs * 0.4).toFixed(1)}s · ${r.ok} 段</small></div>
+      <div><b>${s.name}${r.challenge ? ' · 真人挑战' : ''}</b><small>${new Date(r.at).toLocaleString('zh-CN', { hour12: false })} · ${r.kind === 'photo' ? '照片' : `视频 ${(r.segs * 0.4).toFixed(1)}s · ${r.ok} 段`}</small></div>
       <code>${certNo(r.id)}</code><span class="pill ok">已存证</span>`;
     box.appendChild(a);
   }
@@ -481,7 +559,7 @@ async function openProof(arg) {
   $('certNo').textContent = certNo(id);
   for (const k of ['cScene', 'cTime', 'cBlocks', 'cSegs', 'cWin', 'cOwner']) $(k).textContent = '—';
   setStatus('', '读取中');
-  $('verdict').hidden = true; $('vResult').hidden = true; $('timelineCard').hidden = true;
+  $('verdict').hidden = true; $('verdict').className = 'verdict'; $('vResult').hidden = true; $('timelineCard').hidden = true;
   $('btnVerify').disabled = true; $('vbHint').textContent = '选择与本证书对应的视频文件';
   try {
     const s = await pub.readContract({ address: cfg.address, abi, functionName: 'sessions', args: [id] });
@@ -491,7 +569,7 @@ async function openProof(arg) {
     let label = {}; try { label = JSON.parse(ev[0]?.args.label || '{}'); } catch {}
     const anchors = await fetchAnchors(id, startBlock);
     if (parseHash().arg !== arg) return;
-    proof = { id, owner, startBlock, label, anchors };
+    proof = { id, owner, startBlock, label, anchors, photo: label.m === 'p' };
     const list = [...anchors.values()];
     const lags = list.map(a => Number(a.anchorBlock - a.seenBlock));
     const localRec = store.get('nowproof_records', []).find(r => r.id === arg);
@@ -504,12 +582,13 @@ async function openProof(arg) {
       $('cBlocks').textContent = `#${minB} – #${maxB}`;
       $('cWin').textContent = `${(lags.reduce((a, c) => a + c, 0) / lags.length * 0.4).toFixed(1)}s`;
     }
-    $('cSegs').textContent = `${list.length} 段 · ${(list.length * 0.4).toFixed(1)}s`;
+    $('cSegs').textContent = proof.photo ? (list.length ? '1 张照片' : '未锚定') : `${list.length} 段 · ${(list.length * 0.4).toFixed(1)}s`;
+    $('cSegs').previousElementSibling.textContent = proof.photo ? '内容' : '片段数';
     $('cOwner').textContent = short(owner, 8, 6);
     setStatus('', '已上链 · 待核验');
     const local = await loadVideo(arg);
     if (local && parseHash().arg === arg) {
-      verifyBlob = local; $('vbHint').textContent = '已载入本机原始视频'; $('btnVerify').disabled = false;
+      verifyBlob = local; $('vbHint').textContent = '已载入本机原件'; $('btnVerify').disabled = false;
       runVerify();
     }
   } catch (e) { setStatus('bad', '读取失败'); }
@@ -546,7 +625,10 @@ async function runVerify(tampered = false) {
     results = checkSegments(verifyBytes, proof.anchors);
     renderVerdict();
     renderTimeline();
-    $('vPlayer').src = URL.createObjectURL(new Blob([verifyBytes], { type: 'video/webm' }));
+    const isImg = proof.photo || (verifyBlob.type || '').startsWith('image/');
+    $('vPlayer').hidden = isImg; $('vImage').hidden = !isImg;
+    const url = URL.createObjectURL(new Blob([verifyBytes], { type: isImg ? 'image/jpeg' : 'video/webm' }));
+    if (isImg) { $('vPlayer').removeAttribute('src'); $('vImage').src = url; } else $('vPlayer').src = url;
     $('vResult').hidden = false; $('timelineCard').hidden = false;
   } catch { toast('核验失败，请确认文件'); }
   $('btnVerify').disabled = false;
@@ -558,12 +640,14 @@ function renderVerdict() {
   if (!results.length) { v.className = 'verdict bad'; v.innerHTML = '<b>无锚定记录</b>'; setStatus('bad', '无记录'); return; }
   if (!bad.length && ok) {
     v.className = 'verdict ok';
-    v.innerHTML = `<b>✓ 核验通过</b><p>${ok} 个片段与链上指纹完全一致，视频自录制以来未被修改。</p>`;
+    v.innerHTML = proof.photo ? '<b>✓ 核验通过</b><p>照片与链上指纹完全一致，自拍摄以来未被修改。</p>'
+      : `<b>✓ 核验通过</b><p>${ok} 个片段与链上指纹完全一致，视频自录制以来未被修改。</p>`;
     setStatus('ok', '✓ 核验通过');
   } else {
     const secs = bad.map(r => fmtSec(r.seq * 0.4)).slice(0, 5).join('、');
     v.className = 'verdict bad';
-    v.innerHTML = `<b>⚠ 视频已被篡改</b><p>${bad.length} 个片段与链上指纹不符，位置：${secs}${bad.length > 5 ? ' 等' : ''}。其余 ${ok} 个片段一致。</p>`;
+    v.innerHTML = proof.photo ? '<b>⚠ 照片已被修改</b><p>照片指纹与链上记录不符，文件在存证之后被修改过。</p>'
+      : `<b>⚠ 视频已被篡改</b><p>${bad.length} 个片段与链上指纹不符，位置：${secs}${bad.length > 5 ? ' 等' : ''}。其余 ${ok} 个片段一致。</p>`;
     setStatus('bad', '⚠ 发现篡改');
   }
 }
@@ -592,11 +676,12 @@ async function showSeg(seq) {
   const r = results[Math.max(0, Math.min(seq, results.length - 1))]; if (!r) return;
   document.querySelectorAll('.timeline .c').forEach((c, i) => c.classList.toggle('cur', i === r.seq));
   const tag = { ok: '<span class="pill ok">指纹一致</span>', bad: '<span class="pill bad">已被篡改</span>', miss: '<span class="pill">缺失</span>' }[r.status];
-  if (!r.a) { $('segInfo').innerHTML = `${tag}<div class="kv"><span>位置</span><code>${fmtSec(r.seq * 0.4)}</code></div>`; return; }
+  const pos = proof.photo ? '照片' : fmtSec(r.seq * 0.4);
+  if (!r.a) { $('segInfo').innerHTML = `${tag}<div class="kv"><span>位置</span><code>${pos}</code></div>`; return; }
   const a = r.a;
   $('segInfo').innerHTML = `${tag}
     <div class="big">${(r.lag * 0.4).toFixed(1)}s <small>时间窗</small></div>
-    <div class="kv"><span>位置</span><code>${fmtSec(r.seq * 0.4)}</code></div>
+    <div class="kv"><span>位置</span><code>${pos}</code></div>
     <div class="kv"><span>画面区块</span><code>#${a.seenBlock}</code></div>
     <div class="kv"><span>区块哈希</span><code>${a.seenHash.slice(0, 14)}…</code></div>
     <div class="kv"><span>锚定区块</span><code>#${a.anchorBlock}</code></div>
@@ -610,7 +695,20 @@ async function showSeg(seq) {
 }
 $('vPlayer').ontimeupdate = () => showSeg(Math.floor($('vPlayer').currentTime / 0.4));
 
+async function tamperPhoto() {
+  // Simulate a retouch: clone a patch of the photo over another area, then re-encode.
+  const img = await createImageBitmap(new Blob([verifyBytes], { type: 'image/jpeg' }));
+  const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+  const g = c.getContext('2d'); g.drawImage(img, 0, 0);
+  const w = Math.round(img.width * 0.22), h = Math.round(img.height * 0.22);
+  g.drawImage(c, img.width * 0.12, img.height * 0.2, w, h, img.width * 0.55, img.height * 0.3, w, h);
+  const blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.92));
+  verifyBytes = new Uint8Array(await blob.arrayBuffer());
+  runVerify(true);
+}
+
 $('btnTamper').onclick = () => {
+  if (proof?.photo) return tamperPhoto();
   const candidates = results.filter(r => r.status === 'ok' && r.seq > 0);
   if (!candidates.length) return;
   const r = candidates[Math.floor(candidates.length * (0.3 + Math.random() * 0.4))] || candidates[0];
