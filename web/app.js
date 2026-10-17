@@ -671,6 +671,7 @@ async function runVerify(tampered = false) {
     results = checkSegments(verifyBytes, proof.anchors);
     renderVerdict();
     renderTimeline();
+    segDur = 0.4;
     const isImg = proof.photo || (verifyBlob.type || '').startsWith('image/');
     $('vPlayer').hidden = isImg; $('vImage').hidden = !isImg;
     const url = URL.createObjectURL(new Blob([verifyBytes], { type: isImg ? 'image/jpeg' : (verifyBlob.type || 'video/webm') }));
@@ -690,7 +691,7 @@ function renderVerdict() {
       : `<b>✓ 核验通过</b><p>${ok} 个片段与链上指纹完全一致，视频自录制以来未被修改。</p>`;
     setStatus('ok', '✓ 核验通过');
   } else {
-    const secs = bad.map(r => fmtSec(r.seq * 0.4)).slice(0, 5).join('、');
+    const secs = bad.map(r => fmtSec(r.seq * segDur)).slice(0, 5).join('、');
     v.className = 'verdict bad';
     if (proof.photo) {
       v.innerHTML = '<b>✗ 核验未通过</b><p>照片指纹与链上记录不符：照片在存证之后被修改过，或不是本证书对应的原件。</p>';
@@ -711,8 +712,8 @@ function renderTimeline() {
   for (const r of results) {
     const c = document.createElement('div');
     c.className = `c ${r.status === 'miss' ? '' : r.status}`;
-    c.title = fmtSec(r.seq * 0.4);
-    c.onclick = () => { showSeg(r.seq); try { $('vPlayer').currentTime = r.seq * 0.4; } catch {} };
+    c.title = fmtSec(r.seq * segDur);
+    c.onclick = () => { showSeg(r.seq); try { $('vPlayer').currentTime = (r.seq + 0.5) * segDur; } catch {} };
     tl.appendChild(c);
   }
   showSeg(0);
@@ -729,7 +730,7 @@ async function showSeg(seq) {
   const r = results[Math.max(0, Math.min(seq, results.length - 1))]; if (!r) return;
   document.querySelectorAll('.timeline .c').forEach((c, i) => c.classList.toggle('cur', i === r.seq));
   const tag = { ok: '<span class="pill ok">指纹一致</span>', bad: '<span class="pill bad">已被篡改</span>', miss: '<span class="pill">缺失</span>' }[r.status];
-  const pos = proof.photo ? '照片' : fmtSec(r.seq * 0.4);
+  const pos = proof.photo ? '照片' : fmtSec(r.seq * segDur);
   if (!r.a) { $('segInfo').innerHTML = `${tag}<div class="kv"><span>位置</span><code>${pos}</code></div>`; return; }
   const a = r.a;
   $('segInfo').innerHTML = `${tag}
@@ -746,7 +747,19 @@ async function showSeg(seq) {
     if (h && $('chBox')) { const c = challengeOf(h); $('chBox').innerHTML = `<div class="challenge">挑战指令 <b>${c.action} · ${c.code}</b><br><small class="muted">区块 #${bn}</small></div>`; }
   }
 }
-$('vPlayer').ontimeupdate = () => showSeg(Math.floor($('vPlayer').currentTime / 0.4));
+// MediaRecorder slices are ~0.4s but not exact; map player time to segments using the real duration.
+// Recorder WebM files report duration=Infinity until the player is forced to scan to the end.
+let segDur = 0.4;
+$('vPlayer').onloadedmetadata = () => {
+  const v = $('vPlayer');
+  if (v.duration === Infinity) { v.currentTime = 1e101; v.ondurationchange = () => { if (isFinite(v.duration)) { v.ondurationchange = null; v.currentTime = 0; updateSegDur(); } }; }
+  else updateSegDur();
+};
+function updateSegDur() {
+  const d = $('vPlayer').duration;
+  if (isFinite(d) && d > 0 && results.length) segDur = d / results.length;
+}
+$('vPlayer').ontimeupdate = () => { if (isFinite($('vPlayer').duration)) showSeg(Math.floor($('vPlayer').currentTime / segDur)); };
 
 async function tamperPhoto() {
   // Simulate a retouch: clone a patch of the photo over another area, then re-encode.
