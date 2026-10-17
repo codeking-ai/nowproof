@@ -1,0 +1,21 @@
+{
+  "name": "nowproof",
+  "version": "1.0.0",
+  "scripts": {
+    "deploy": "node scripts/deploy.mjs",
+    "test:chain": "node scripts/e2e.mjs 8",
+    "test:browser": "node scripts/browser-test.mjs",
+    "vendor": "esbuild scripts/vendor-entry.js --bundle --format=esm --minify --outfile=web/vendor.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "description": "NowProof — time-sandwich proofs for live video on Monad",
+  "devDependencies": {
+    "esbuild": "^0.24.2",
+    "playwright": "1.49",
+    "solc": "^0.8.28",
+    "viem": "^2.57.7"
+  },
+  "type": "module"
+}

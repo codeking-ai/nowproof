@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NowProof 此刻为证</title>
+<meta name="description" content="用 Monad 区块把每 0.4 秒视频夹在 2 秒时间窗内，对抗 AI 伪造与事后剪辑。">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%236e54ff'/><rect x='7' y='9' width='18' height='4' rx='1' fill='white'/><rect x='7' y='19' width='18' height='4' rx='1' fill='white'/><circle cx='16' cy='16' r='2.5' fill='%23ffd166'/></svg>">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo"><i></i><b></b><i></i></span>
+    <div>
+      <h1>NowProof <span>此刻为证</span></h1>
+      <p>把每 0.4 秒视频夹进两个 Monad 区块之间</p>
+    </div>
+  </div>
+  <div class="chain" id="chainBadge" title="Monad Testnet 最新区块">
+    <span class="dot"></span>
+    <span>Monad Testnet</span>
+    <code id="headBlock">#…</code>
+    <span class="bt" id="blockTime">— s/块</span>
+  </div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab active" data-tab="record">① 录制存证</button>
+  <button class="tab" data-tab="verify">② 验证视频</button>
+  <button class="tab" data-tab="how">③ 原理：时间夹心</button>
+</nav>
+
+<main>
+  <!-- RECORD -->
+  <section id="tab-record" class="panel active">
+    <div class="grid2">
+      <div class="stage">
+        <canvas id="cam" width="1280" height="720"></canvas>
+        <div class="stage-empty" id="camEmpty">
+          <p>摄像头未开启</p>
+          <button class="btn" id="btnCam">开启摄像头</button>
+          <small>画面会实时叠加 Monad 最新区块号与哈希，并烧录进视频</small>
+        </div>
+        <div class="rec-badge" id="recBadge" hidden>● REC <span id="recTime">0.0s</span></div>
+      </div>
+
+      <aside class="side">
+        <div class="card">
+          <h3>临时钱包 <small>（自动生成，无需安装钱包）</small></h3>
+          <div class="kv"><span>地址</span><code id="wAddr">—</code></div>
+          <div class="kv"><span>余额</span><code id="wBal">—</code></div>
+          <button class="btn ghost sm" id="btnFund">领取测试 MON</button>
+        </div>
+
+        <div class="card">
+          <h3>存证会话</h3>
+          <label class="field">标签<input id="label" value="现场存证" maxlength="40"></label>
+          <div class="row">
+            <button class="btn primary" id="btnStart" disabled>开始录制并上链</button>
+            <button class="btn danger" id="btnStop" disabled>停止</button>
+          </div>
+          <div class="stats">
+            <div><b id="sSession">—</b><span>会话 ID</span></div>
+            <div><b id="sSent">0</b><span>已发送</span></div>
+            <div><b id="sOk">0</b><span>已上链</span></div>
+            <div><b id="sWin">—</b><span>平均窗口</span></div>
+          </div>
+          <div class="done" id="doneBox" hidden>
+            <p>✅ 录制完成，视频与链上记录已绑定。</p>
+            <div class="row">
+              <a class="btn sm" id="dlLink" download>下载视频</a>
+              <button class="btn primary sm" id="btnVerifyNow">立即验证这段视频 →</button>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="card">
+      <h3>实时上链流水 <small>每一行 = 一段 0.4 秒视频的指纹，被夹在「画面中的区块」与「上链区块」之间</small></h3>
+      <div class="feed" id="feed"><p class="muted">开始录制后，这里会滚动显示每个片段的上链情况。</p></div>
+    </div>
+  </section>
+
+  <!-- VERIFY -->
+  <section id="tab-verify" class="panel">
+    <div class="card">
+      <h3>验证一段视频</h3>
+      <div class="row wrap">
+        <label class="field">会话 ID<input id="vSession" inputmode="numeric" placeholder="例如 3"></label>
+        <label class="field file">视频文件<input type="file" id="vFile" accept="video/webm,video/*"></label>
+        <button class="btn primary" id="btnVerify">验证</button>
+        <button class="btn danger ghost" id="btnTamper" disabled title="随机改动视频中某一段的数据，再验证一次">模拟篡改一段</button>
+      </div>
+      <p class="muted small">验证完全在浏览器内完成：逐段重算视频指纹，与 Monad 链上记录比对，并检查每段的时间窗。</p>
+    </div>
+
+    <div class="verdict" id="verdict" hidden></div>
+
+    <div class="grid2 vgrid" id="vResult" hidden>
+      <div class="stage">
+        <video id="vPlayer" controls playsinline muted></video>
+      </div>
+      <aside class="side">
+        <div class="card">
+          <h3>当前播放片段</h3>
+          <div id="segInfo" class="seginfo muted">播放视频，查看每一刻对应的链上证据。</div>
+        </div>
+      </aside>
+    </div>
+
+    <div class="card" id="timelineCard" hidden>
+      <h3>逐段证据时间轴 <small>每格 = 0.4 秒视频 · 点击查看详情</small></h3>
+      <div class="timeline" id="timeline"></div>
+      <div class="legend"><span class="ok"></span>指纹一致 <span class="bad"></span>被篡改 <span class="miss"></span>链上无记录</div>
+    </div>
+  </section>
+
+  <!-- HOW -->
+  <section id="tab-how" class="panel">
+    <div class="card how">
+      <h2>问题：AI 视频已经真假难辨</h2>
+      <p>行车记录、事故现场、快递签收、验货视频……现有的「视频指纹上链」只能证明视频<b>不晚于</b>某时刻存在，造假者完全可以先花一小时用 AI 生成，再把指纹存上去。</p>
+
+      <h2>NowProof 的机制：时间夹心</h2>
+      <svg viewBox="0 0 760 220" class="diagram" role="img" aria-label="时间夹心示意图">
+        <defs>
+          <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0L10,5L0,10z" class="fillfg"/></marker>
+        </defs>
+        <line x1="20" y1="180" x2="740" y2="180" class="axis" marker-end="url(#ar)"/>
+        <text x="742" y="200" class="lbl" text-anchor="end">时间</text>
+        <rect x="90" y="40" width="130" height="110" rx="10" class="blk"/>
+        <text x="155" y="80" class="t1" text-anchor="middle">区块 N</text>
+        <text x="155" y="104" class="t2" text-anchor="middle">哈希 0x7f3a…</text>
+        <text x="155" y="128" class="t2" text-anchor="middle">事先无人能知</text>
+        <rect x="270" y="58" width="220" height="74" rx="10" class="vid"/>
+        <text x="380" y="90" class="t1" text-anchor="middle">0.4 秒视频片段</text>
+        <text x="380" y="113" class="t2" text-anchor="middle">画面里烧录了「N + 0x7f3a…」</text>
+        <rect x="540" y="40" width="130" height="110" rx="10" class="blk"/>
+        <text x="605" y="80" class="t1" text-anchor="middle">区块 N+k</text>
+        <text x="605" y="104" class="t2" text-anchor="middle">记录片段指纹</text>
+        <text x="605" y="128" class="t2" text-anchor="middle">之后无法更改</text>
+        <path d="M220 95 L268 95" class="lnk" marker-end="url(#ar)"/>
+        <path d="M490 95 L538 95" class="lnk" marker-end="url(#ar)"/>
+        <text x="245" y="170" class="lbl" text-anchor="middle">不早于 N</text>
+        <text x="515" y="170" class="lbl" text-anchor="middle">不晚于 N+k</text>
+      </svg>
+      <ol>
+        <li><b>下限（不早于）</b>：录制时，画面实时叠加 Monad 最新区块号与哈希。这个哈希在区块产生前不可预测，所以片段一定拍于区块 N 之后。</li>
+        <li><b>上限（不晚于）</b>：每 0.4 秒把该片段的 keccak256 指纹写入下一个区块，证明它在区块 N+k 之前已经存在。</li>
+        <li><b>合约强制</b>：合约用 <code>blockhash()</code> 核对画面中的区块哈希是真的，并要求 N 与 N+k 相差不超过 10 个区块，超出直接拒绝。</li>
+      </ol>
+
+      <h2>为什么只能在 Monad 上做</h2>
+      <p>时间窗 ≈ 出块时间 × 区块差。<b>链越快，证明越强。</b>每秒还要写入 2.5 笔交易/每台设备，只有又快又便宜的链扛得住。</p>
+      <div class="bars" id="bars">
+        <div class="bar"><span>以太坊（12s/块）</span><div class="track"><i style="width:100%" class="eth"></i></div><code>≈ 24–36 s</code></div>
+        <div class="bar"><span>典型 L2（2s/块）</span><div class="track"><i style="width:22%" class="l2"></i></div><code>≈ 4–8 s</code></div>
+        <div class="bar"><span>Monad（0.4s/块）</span><div class="track"><i style="width:5%" class="mon" id="monBar"></i></div><code id="monWin">≈ 1.6–2 s（实测）</code></div>
+      </div>
+      <p class="muted small">24 秒足够用 AI 换掉一张脸；不到 2 秒内要生成并编码一段以假乱真的视频，几乎不可能。</p>
+
+      <h2>应用场景</h2>
+      <div class="chips">
+        <span>🚗 车险理赔 / 事故证据</span><span>📦 快递签收 / 外卖送达</span><span>🔍 二手验货</span><span>📰 新闻现场</span><span>⚖️ 法律取证</span><span>🏗️ 工地巡检</span>
+      </div>
+      <h2>商业模式</h2>
+      <p>按存证时长计费的 API / SDK；面向保险公司、物流平台、二手交易平台的企业接入；司法存证机构的批量验证服务。</p>
+      <h2>诚实的边界</h2>
+      <p class="muted">如果摄像头硬件本身被攻破，任何软件方案都无法兜底；NowProof 证明的是「这段画面诞生于这不到 2 秒的窗口内」，大幅抬高事后伪造与剪辑的门槛。</p>
+    </div>
+  </section>
+</main>
+
+<footer class="foot">
+  合约 <a id="contractLink" target="_blank" rel="noopener">—</a> · Monad Blitz 上海 V3 · <a href="https://github.com/codeking-ai/nowproof" target="_blank" rel="noopener">GitHub</a>
+</footer>
+
+<div class="toast" id="toast" hidden></div>
+<script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+node_modules
+.deployer.env
+*.log
+.tmp
