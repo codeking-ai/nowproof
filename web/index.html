@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NowProof 此刻为证</title>
-<meta name="description" content="用 Monad 区块把每 0.4 秒视频夹在 2 秒时间窗内，对抗 AI 伪造与事后剪辑。">
+<meta name="description" content="用 Monad 区块把每 0.4 秒视频夹在约 2–3 秒时间窗内，对抗 AI 伪造与事后剪辑。">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%236e54ff'/><rect x='7' y='9' width='18' height='4' rx='1' fill='white'/><rect x='7' y='19' width='18' height='4' rx='1' fill='white'/><circle cx='16' cy='16' r='2.5' fill='%23ffd166'/></svg>">
 <link rel="stylesheet" href="style.css">
 </head>
@@ -157,9 +157,9 @@
       <div class="bars" id="bars">
         <div class="bar"><span>以太坊（12s/块）</span><div class="track"><i style="width:100%" class="eth"></i></div><code>≈ 24–36 s</code></div>
         <div class="bar"><span>典型 L2（2s/块）</span><div class="track"><i style="width:22%" class="l2"></i></div><code>≈ 4–8 s</code></div>
-        <div class="bar"><span>Monad（0.4s/块）</span><div class="track"><i style="width:5%" class="mon" id="monBar"></i></div><code id="monWin">≈ 1.6–2 s（实测）</code></div>
+        <div class="bar"><span>Monad（0.4s/块）</span><div class="track"><i style="width:5%" class="mon" id="monBar"></i></div><code id="monWin">≈ 2–3 s（实测）</code></div>
       </div>
-      <p class="muted small">24 秒足够用 AI 换掉一张脸；不到 2 秒内要生成并编码一段以假乱真的视频，几乎不可能。</p>
+      <p class="muted small">24 秒足够用 AI 换掉一张脸；2–3 秒内要生成并编码一段以假乱真的视频，几乎不可能。</p>
 
       <h2>应用场景</h2>
       <div class="chips">
@@ -168,7 +168,7 @@
       <h2>商业模式</h2>
       <p>按存证时长计费的 API / SDK；面向保险公司、物流平台、二手交易平台的企业接入；司法存证机构的批量验证服务。</p>
       <h2>诚实的边界</h2>
-      <p class="muted">如果摄像头硬件本身被攻破，任何软件方案都无法兜底；NowProof 证明的是「这段画面诞生于这不到 2 秒的窗口内」，大幅抬高事后伪造与剪辑的门槛。</p>
+      <p class="muted">如果摄像头硬件本身被攻破，任何软件方案都无法兜底；NowProof 证明的是「这段画面诞生于这 2–3 秒的窗口内」，大幅抬高事后伪造与剪辑的门槛。</p>
     </div>
   </section>
 </main>
