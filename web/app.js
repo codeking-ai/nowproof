@@ -9,7 +9,7 @@ const FAUCET = 'https://agents.devnads.com/v1/faucet';
 const EXPLORER = 'https://testnet.monadexplorer.com';
 const SLICE_MS = 400;          // one video segment per Monad block time
 const GAS_START = 150000n;
-const GAS_ANCHOR = 45000n;     // measured ~35.2k; Monad bills the gas limit, keep it tight
+const GAS_ANCHOR = 40000n;     // measured 35.2k (fixed code path); Monad bills the gas limit, keep it tight
 const LOG_RANGE = 100;         // testnet RPC caps eth_getLogs at 100 blocks
 const CH_BUCKET = 8n;          // challenge rotates every 8 blocks (~3.2s)
 
@@ -154,6 +154,8 @@ function loadKey() {
 const account = privateKeyToAccount(loadKey());
 $('wAddr').textContent = short(account.address, 6, 4);
 $('wAddr').title = account.address;
+$('wAddr').style.cursor = 'pointer';
+$('wAddr').onclick = async () => { try { await navigator.clipboard.writeText(account.address); toast('存证账户地址已复制'); } catch { toast(account.address, 8000); } };
 let balance = 0n;
 async function refreshBalance() {
   try { balance = await pub.getBalance({ address: account.address }); $('wBal').textContent = `${Number(formatEther(balance)).toFixed(3)} MON`; } catch {}
@@ -234,17 +236,57 @@ function prepareSession() {
 }
 
 const canvas = $('cam'), ctx = canvas.getContext('2d');
+// iOS Safari only feeds frames to a <video> that is inline, muted and attached to the document.
 const video = document.createElement('video');
-video.muted = true; video.playsInline = true;
+video.muted = true; video.playsInline = true; video.autoplay = true;
+for (const a of ['muted', 'playsinline', 'webkit-playsinline', 'autoplay']) video.setAttribute(a, '');
+video.style.cssText = 'position:fixed;width:1px;height:1px;opacity:0;pointer-events:none;left:0;top:0';
+document.body.appendChild(video);
+const inApp = /MicroMessenger|QQ\/|Weibo|DingTalk|AlipayClient|Lark|Feishu/i.test(navigator.userAgent);
 let source = null, rec = null, drawnMin = null, lastDrawn = null;
 
+function cameraError(msg) {
+  $('camMsg').textContent = msg; $('camMsg').hidden = false;
+  $('btnCam').textContent = '重新打开相机';
+}
+async function openStream() {
+  const tries = [
+    { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false },
+    { video: { facingMode: { ideal: 'environment' } }, audio: false },
+    { video: true, audio: false },
+  ];
+  let last;
+  for (const c of tries) {
+    try { return await navigator.mediaDevices.getUserMedia(c); }
+    catch (e) { last = e; if (e.name === 'NotAllowedError' || e.name === 'SecurityError') break; }
+  }
+  throw last;
+}
 async function startCamera() {
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-    video.srcObject = stream; await video.play();
-    source = 'camera';
-  } catch {
+  $('camMsg').hidden = true;
+  if (new URLSearchParams(location.search).has('demo')) {
     source = 'synthetic';
+  } else {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      return cameraError(inApp ? '当前 App 内置浏览器不支持调用相机，请点击右上角「…」，选择「在浏览器中打开」。'
+        : '当前浏览器不支持网页相机，请使用 Safari、Chrome 或系统浏览器打开。');
+    }
+    try {
+      const stream = await openStream();
+      video.srcObject = stream;
+      await video.play().catch(() => {});
+      for (let i = 0; i < 40 && !video.videoWidth; i++) await sleep(50);
+      if (!video.videoWidth) throw Object.assign(new Error('no frames'), { name: 'NoFrames' });
+      source = 'camera';
+    } catch (e) {
+      const why = {
+        NotAllowedError: '相机权限被拒绝。请在浏览器设置中允许本网站使用相机后重试。',
+        NotFoundError: '未检测到可用的摄像头。',
+        NotReadableError: '摄像头正被其他应用占用，请关闭其他相机应用后重试。',
+        NoFrames: '相机已打开但没有画面，请重试或换用系统浏览器。',
+      }[e.name];
+      return cameraError(why || (inApp ? '当前 App 内置浏览器无法调用相机，请点击右上角「…」，选择「在浏览器中打开」。' : `无法打开相机（${e.name || e.message}）`));
+    }
   }
   const w = source === 'camera' ? video.videoWidth : 1280, h = source === 'camera' ? video.videoHeight : 720;
   const scale = Math.min(1, 1280 / w);
@@ -369,10 +411,11 @@ async function startRecording() {
   } catch (e) { rec = null; $('btnShutter').disabled = false; $('sSession').textContent = '—'; return toast('创建存证失败，请重试'); }
   $('sSession').textContent = certNo(rec.id);
 
-  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(m => MediaRecorder.isTypeSupported(m)) || '';
-  rec.mime = mime || 'video/webm';
+  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm', 'video/mp4;codecs=avc1', 'video/mp4']
+    .find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
   const mr = new MediaRecorder(canvas.captureStream(30), { mimeType: mime, videoBitsPerSecond: 1_500_000 });
   rec.mr = mr;
+  rec.mime = mr.mimeType || mime || 'video/webm';
   drawnMin = null;
   mr.ondataavailable = e => {
     if (!e.data.size) return;
@@ -489,7 +532,7 @@ async function finishRecording() {
   $('doneText').textContent = '正在确认最后的片段…';
   $('doneBox').hidden = false;
   $('btnViewCert').href = `#/proof/${r.id}`;
-  $('dlLink').href = URL.createObjectURL(blob); $('dlLink').download = `nowproof-${certNo(r.id)}.webm`;
+  $('dlLink').href = URL.createObjectURL(blob); $('dlLink').download = `nowproof-${certNo(r.id)}.${blob.type.includes('mp4') ? 'mp4' : 'webm'}`;
   await saveVideo(r.id, blob);
   while (r.pending.size) await sleep(400);
   const avg = r.ok ? r.lagSum / r.ok * 0.4 : 0;
@@ -627,7 +670,7 @@ async function runVerify(tampered = false) {
     renderTimeline();
     const isImg = proof.photo || (verifyBlob.type || '').startsWith('image/');
     $('vPlayer').hidden = isImg; $('vImage').hidden = !isImg;
-    const url = URL.createObjectURL(new Blob([verifyBytes], { type: isImg ? 'image/jpeg' : 'video/webm' }));
+    const url = URL.createObjectURL(new Blob([verifyBytes], { type: isImg ? 'image/jpeg' : (verifyBlob.type || 'video/webm') }));
     if (isImg) { $('vPlayer').removeAttribute('src'); $('vImage').src = url; } else $('vPlayer').src = url;
     $('vResult').hidden = false; $('timelineCard').hidden = false;
   } catch { toast('核验失败，请确认文件'); }
