@@ -63,15 +63,17 @@ await wait(4000);
 // 3. Video + challenge
 await page.evaluate(() => { location.hash = '#/capture?s=kyc'; });
 await page.waitForSelector('#btnShutter:not([disabled])');
-await cap('视频模式 + 真人挑战：指令由区块哈希实时生成，无法预知');
-await wait(4000);
+await cap('视频模式 + 真人挑战：指令由区块哈希实时生成，约 8 秒一条，无法预知');
+await wait(5000);
 await page.click('#btnShutter');
 await page.waitForFunction(() => document.getElementById('sSession').textContent.startsWith('NP-'), null, { timeout: 60000 });
 await cap('每 0.4 秒切一段，指纹逐段上链');
 await page.click('.ledger summary');
 await wait(5000);
 await cap('每一段都被夹在「画面中的区块」与「上链区块」之间，时间窗约 2 秒');
-await wait(7000);
+await wait(6000);
+await cap('约 8 秒后自动换一条新指令，倒计时由区块推进');
+await wait(6000);
 await page.click('#btnShutter');
 await page.waitForFunction(() => document.getElementById('doneText').textContent.includes('个片段已锚定'), null, { timeout: 60000 });
 await cap(await page.textContent('#doneText'));
@@ -86,6 +88,13 @@ await page.click('#btnTamper');
 await page.waitForFunction(() => /verdict bad/.test(document.getElementById('verdict').className), null, { timeout: 30000 });
 await cap('篡改位置精确到 0.4 秒');
 await wait(4500);
+await scroll(-900);
+await cap('对比：用另一段视频冒充这份证书……');
+await wait(2500);
+await page.setInputFiles('#vFile', 'demo/assets/other-video.webm');
+await page.waitForFunction(() => document.getElementById('verdict').textContent.includes('不匹配'), null, { timeout: 30000 });
+await cap('核验未通过：文件与本证书不匹配，冒充无效');
+await wait(5000);
 
 // 4. Why Monad
 await page.evaluate(() => { location.hash = '#/about'; });

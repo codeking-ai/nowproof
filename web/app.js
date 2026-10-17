@@ -11,7 +11,8 @@ const SLICE_MS = 400;          // one video segment per Monad block time
 const GAS_START = 150000n;
 const GAS_ANCHOR = 40000n;     // measured 35.2k (fixed code path); Monad bills the gas limit, keep it tight
 const LOG_RANGE = 100;         // testnet RPC caps eth_getLogs at 100 blocks
-const CH_BUCKET = 8n;          // challenge rotates every 8 blocks (~3.2s)
+const CH_BUCKET = 20n;         // challenge rotates every 20 blocks (~8s); stored in the session label
+const CH_BUCKET_V1 = 8n;       // sessions created before the label carried a bucket size
 
 const SCENES = {
   general: { name: '通用存证', ic: '🎥' },
@@ -225,7 +226,7 @@ function prepareSession() {
   const entry = { c, id: null };
   entry.p = (async () => {
     if (!(await ensureFunds())) throw new Error('funds');
-    const hash = await sendTx(encodeFunctionData({ abi, functionName: 'start', args: [JSON.stringify({ v: 1, c: c ? 1 : 0, m: 'p' })] }), GAS_START);
+    const hash = await sendTx(encodeFunctionData({ abi, functionName: 'start', args: [JSON.stringify({ v: 1, c: c ? 1 : 0, m: 'p', b: Number(CH_BUCKET) })] }), GAS_START);
     const rc = await pub.waitForTransactionReceipt({ hash, pollingInterval: 250 });
     entry.id = parseEventLogs({ abi, logs: rc.logs, eventName: 'SessionStarted' })[0].args.id;
     return entry.id;
@@ -358,13 +359,14 @@ function draw(t) {
     const bw = Math.min(W * 0.62, 640), bh = Math.round(H * 0.13), bx = (W - bw) / 2, by = Math.round(H * 0.05);
     ctx.fillStyle = 'rgba(110,84,255,.88)';
     ctx.beginPath(); ctx.roundRect(bx, by, bw, bh, 14); ctx.fill();
-    const p = Math.min(1, (performance.now() - challenge.at) / 3200);
+    const p = head ? Math.min(1, Number(head.number - challenge.block) / Number(CH_BUCKET)) : 0;
     ctx.fillStyle = 'rgba(255,255,255,.35)'; ctx.fillRect(bx + 14, by + bh - 8, (bw - 28) * (1 - p), 3);
     ctx.textAlign = 'center'; ctx.fillStyle = '#fff';
     ctx.font = `700 ${Math.round(bh * 0.36)}px system-ui`;
     ctx.fillText(`${challenge.action} · 念出 ${challenge.code}`, W / 2, by + bh * 0.52);
     ctx.font = `500 ${Math.round(bh * 0.17)}px ui-monospace,Consolas,monospace`; ctx.fillStyle = '#e6e0ff';
-    ctx.fillText(`真人挑战 · 区块 #${challenge.block}`, W / 2, by + bh * 0.8);
+    const left = head ? Math.max(0, Number(challenge.block + CH_BUCKET - head.number)) * 0.4 : 0;
+    ctx.fillText(`真人挑战 · 区块 #${challenge.block} · 剩余 ${Math.ceil(left)}s`, W / 2, by + bh * 0.8);
     ctx.textAlign = 'left';
   }
   if (rec) {
@@ -403,7 +405,7 @@ async function startRecording() {
   feedRows.clear();
   $('doneBox').hidden = true; $('sSession').textContent = '创建中…'; $('sOk').textContent = '0'; $('sWin').textContent = '—';
   try {
-    const label = JSON.stringify({ v: 1, c: rec.challenge ? 1 : 0 });   // no business data on-chain; scene stays local
+    const label = JSON.stringify({ v: 1, c: rec.challenge ? 1 : 0, b: Number(CH_BUCKET) });   // no business data on-chain; scene stays local
     const hash = await sendTx(encodeFunctionData({ abi, functionName: 'start', args: [label] }), GAS_START);
     const rc = await pub.waitForTransactionReceipt({ hash, pollingInterval: 250 });
     rec.id = parseEventLogs({ abi, logs: rc.logs, eventName: 'SessionStarted' })[0].args.id;
@@ -612,7 +614,7 @@ async function openProof(arg) {
     let label = {}; try { label = JSON.parse(ev[0]?.args.label || '{}'); } catch {}
     const anchors = await fetchAnchors(id, startBlock);
     if (parseHash().arg !== arg) return;
-    proof = { id, owner, startBlock, label, anchors, photo: label.m === 'p' };
+    proof = { id, owner, startBlock, label, anchors, photo: label.m === 'p', bucket: BigInt(label.b || CH_BUCKET_V1) };
     const list = [...anchors.values()];
     const lags = list.map(a => Number(a.anchorBlock - a.seenBlock));
     const localRec = store.get('nowproof_records', []).find(r => r.id === arg);
@@ -640,6 +642,7 @@ async function openProof(arg) {
 $('vFile').onchange = () => {
   const f = $('vFile').files[0]; if (!f) return;
   verifyBlob = f; $('vbHint').textContent = f.name; $('btnVerify').disabled = !proof;
+  if (proof) runVerify();
 };
 $('btnVerify').onclick = () => runVerify();
 $('btnShare').onclick = async () => {
@@ -689,9 +692,16 @@ function renderVerdict() {
   } else {
     const secs = bad.map(r => fmtSec(r.seq * 0.4)).slice(0, 5).join('、');
     v.className = 'verdict bad';
-    v.innerHTML = proof.photo ? '<b>⚠ 照片已被修改</b><p>照片指纹与链上记录不符，文件在存证之后被修改过。</p>'
-      : `<b>⚠ 视频已被篡改</b><p>${bad.length} 个片段与链上指纹不符，位置：${secs}${bad.length > 5 ? ' 等' : ''}。其余 ${ok} 个片段一致。</p>`;
-    setStatus('bad', '⚠ 发现篡改');
+    if (proof.photo) {
+      v.innerHTML = '<b>✗ 核验未通过</b><p>照片指纹与链上记录不符：照片在存证之后被修改过，或不是本证书对应的原件。</p>';
+      setStatus('bad', '✗ 未通过');
+    } else if (!ok) {
+      v.innerHTML = `<b>✗ 核验未通过：文件与本证书不匹配</b><p>${results.length} 个片段全部与链上指纹不符。该文件不是本证书对应的原件，或已被整体替换、重新编码。</p>`;
+      setStatus('bad', '✗ 未通过');
+    } else {
+      v.innerHTML = `<b>⚠ 视频已被篡改</b><p>${bad.length} 个片段与链上指纹不符，位置：${secs}${bad.length > 5 ? ' 等' : ''}。其余 ${ok} 个片段一致。</p>`;
+      setStatus('bad', '⚠ 发现篡改');
+    }
   }
 }
 const fmtSec = s => `${String(Math.floor(s / 60)).padStart(2, '0')}:${(s % 60).toFixed(1).padStart(4, '0')}`;
@@ -731,7 +741,7 @@ async function showSeg(seq) {
     <div class="kv"><span>交易</span><a href="${EXPLORER}/tx/${a.tx}" target="_blank" rel="noopener">${short(a.tx)}</a></div>
     <div id="chBox"></div>`;
   if (proof.label.c) {
-    const bn = (a.seenBlock / CH_BUCKET) * CH_BUCKET;
+    const bn = (a.seenBlock / proof.bucket) * proof.bucket;
     const h = await blockHashOf(bn);
     if (h && $('chBox')) { const c = challengeOf(h); $('chBox').innerHTML = `<div class="challenge">挑战指令 <b>${c.action} · ${c.code}</b><br><small class="muted">区块 #${bn}</small></div>`; }
   }
