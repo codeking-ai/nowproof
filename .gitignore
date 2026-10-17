@@ -2,3 +2,4 @@ node_modules
 .deployer.env
 *.log
 .tmp
+.sponsor.env
