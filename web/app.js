@@ -4,6 +4,7 @@ import {
 } from './vendor.js';
 
 const RPC = 'https://testnet-rpc.monad.xyz';
+const WSS = 'wss://testnet-rpc.monad.xyz';
 const FAUCET = 'https://agents.devnads.com/v1/faucet';
 const EXPLORER = 'https://testnet.monadexplorer.com';
 const SLICE_MS = 400;          // one video segment per Monad block time
@@ -82,33 +83,59 @@ window.addEventListener('hashchange', route);
 // ---------------------------------------------------------------- live chain head
 let head = null;               // { number: bigint, hash, at: ms }
 const blockTimes = [];
-const recentBlocks = [];
-async function pollHead() {
-  try {
-    const b = await pub.getBlock({ blockTag: 'latest' });
-    if (!head || b.number > head.number) {
-      const now = performance.now();
-      if (head) {
-        blockTimes.push((now - head.at) / Number(b.number - head.number));
-        if (blockTimes.length > 30) blockTimes.shift();
-      }
-      head = { number: b.number, hash: b.hash, at: now };
-      onHead(b);
-    }
-    document.querySelector('.chain .dot').classList.add('live');
-  } catch { document.querySelector('.chain .dot').classList.remove('live'); }
-  setTimeout(pollHead, 200);
+// New blocks are pushed over a WebSocket newHeads subscription; HTTP polling is only a fallback.
+// Nothing runs while the tab is hidden (unless a recording is in progress).
+let ws = null, pollTimer = null, wsRetry = null;
+function ingestHead(number, hash) {
+  if (head && number <= head.number) return;
+  const now = performance.now();
+  if (head) {
+    blockTimes.push((now - head.at) / Number(number - head.number));
+    if (blockTimes.length > 30) blockTimes.shift();
+  }
+  head = { number, hash, at: now };
+  document.querySelector('.chain .dot').classList.add('live');
+  onHead(head);
 }
+function connectHeads() {
+  if (ws || (document.hidden && !rec)) return;
+  try { ws = new WebSocket(WSS); } catch { ws = null; return startPolling(); }
+  ws.onopen = () => { stopPolling(); ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_subscribe', params: ['newHeads'] })); };
+  ws.onmessage = e => {
+    const h = JSON.parse(e.data).params?.result;
+    if (h?.number) ingestHead(BigInt(h.number), h.hash);
+  };
+  ws.onclose = () => {
+    ws = null;
+    if (document.hidden && !rec) return;
+    startPolling();
+    clearTimeout(wsRetry); wsRetry = setTimeout(connectHeads, 5000);
+  };
+}
+function startPolling() {
+  if (pollTimer) return;
+  const tick = async () => {
+    try { const b = await pub.getBlock({ blockTag: 'latest' }); ingestHead(b.number, b.hash); }
+    catch { document.querySelector('.chain .dot').classList.remove('live'); }
+    const fast = rec || ['home', 'capture'].includes(parseHash().name);
+    pollTimer = setTimeout(tick, fast ? 250 : 2000);
+  };
+  pollTimer = setTimeout(tick, 0);
+}
+function stopPolling() { clearTimeout(pollTimer); pollTimer = null; }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && !rec) { stopPolling(); clearTimeout(wsRetry); if (ws) { ws.onclose = null; ws.close(); ws = null; } }
+  else if (!document.hidden) connectHeads();
+});
 function onHead(b) {
   $('headBlock').textContent = `#${b.number}`;
   $('stBlock').textContent = Number(b.number).toLocaleString();
   const avg = blockTimes.length > 3 ? blockTimes.reduce((a, c) => a + c, 0) / blockTimes.length / 1000 : null;
   if (avg) $('blockTime').textContent = `${avg.toFixed(2)} s`;
-  recentBlocks.unshift({ n: b.number, h: b.hash, tx: b.transactions.length });
-  recentBlocks.length = Math.min(recentBlocks.length, 7);
+  const t = new Date();
   const el = document.createElement('div');
   el.className = 'hc-blk';
-  el.innerHTML = `<b>#${b.number}</b><span>${b.hash}</span><small>${b.transactions.length} tx</small>`;
+  el.innerHTML = `<b>#${b.number}</b><span>${b.hash}</span><small>${t.toLocaleTimeString('zh-CN', { hour12: false })}.${String(t.getMilliseconds()).padStart(3, '0')}</small>`;
   const box = $('heroBlocks'); box.prepend(el);
   while (box.children.length > 7) box.lastChild.remove();
   updateChallenge();
@@ -299,7 +326,7 @@ async function startRecording() {
   feedRows.clear();
   $('doneBox').hidden = true; $('sSession').textContent = '创建中…'; $('sOk').textContent = '0'; $('sWin').textContent = '—';
   try {
-    const label = JSON.stringify({ s: scene, c: rec.challenge ? 1 : 0 });
+    const label = JSON.stringify({ v: 1, c: rec.challenge ? 1 : 0 });   // no business data on-chain; scene stays local
     const hash = await sendTx(encodeFunctionData({ abi, functionName: 'start', args: [label] }), GAS_START);
     const rc = await pub.waitForTransactionReceipt({ hash, pollingInterval: 250 });
     rec.id = parseEventLogs({ abi, logs: rc.logs, eventName: 'SessionStarted' })[0].args.id;
@@ -467,8 +494,9 @@ async function openProof(arg) {
     proof = { id, owner, startBlock, label, anchors };
     const list = [...anchors.values()];
     const lags = list.map(a => Number(a.anchorBlock - a.seenBlock));
-    const sc = SCENES[label.s] || SCENES.general;
-    $('cScene').textContent = `${sc.ic} ${sc.name}${label.c ? ' · 真人挑战' : ''}`;
+    const localRec = store.get('nowproof_records', []).find(r => r.id === arg);
+    const sc = SCENES[localRec?.scene || label.s];
+    $('cScene').textContent = sc ? `${sc.ic} ${sc.name}${label.c ? ' · 真人挑战' : ''}` : `🔒 私密${label.c ? ' · 真人挑战' : ''}`;
     $('cTime').textContent = new Date(Number(startTime) * 1000).toLocaleString('zh-CN', { hour12: false });
     if (list.length) {
       const minB = list.reduce((m, a) => a.seenBlock < m ? a.seenBlock : m, list[0].seenBlock);
@@ -594,6 +622,6 @@ $('btnTamper').onclick = () => {
 };
 
 // ---------------------------------------------------------------- boot
-pollHead();
+connectHeads();
 refreshBalance();
 route();

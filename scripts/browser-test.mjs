@@ -14,11 +14,16 @@ const page = await ctx.newPage();
 const errors = [];
 page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
 page.on('pageerror', e => errors.push(String(e)));
+let latestPolls = 0, wsOpened = false;
+page.on('request', r => { if (r.url().startsWith('https://testnet-rpc') && (r.postData() || '').includes('"latest"')) latestPolls++; });
+page.on('websocket', () => { wsOpened = true; });
 const text = async sel => (await page.textContent(sel)).replace(/\s+/g, ' ').trim();
 
 await page.goto(base);
 await page.waitForFunction(() => document.getElementById('headBlock').textContent.startsWith('#'), null, { timeout: 20000 });
 await page.waitForTimeout(2500);
+latestPolls = 0; await page.waitForTimeout(3000);
+console.log('head source: websocket', wsOpened, '| HTTP latest-block polls in 3s:', latestPolls);
 console.log('home: block', await text('#stBlock'), 'sessions', await text('#stSessions'));
 await page.screenshot({ path: '.tmp/home.png' });
 
