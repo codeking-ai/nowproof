@@ -58,11 +58,29 @@ await page.waitForTimeout(4000);                       // session is pre-opened 
 await page.click('#btnShutter');
 await page.waitForFunction(() => document.getElementById('doneText').textContent.includes('照片已锚定'), null, { timeout: 60000 });
 console.log('photo done:', await text('#doneText'));
+{ // scan the QR code inside the captured photo
+  const { default: jsQR } = await import('jsqr');
+  const { default: jpeg } = await import('jpeg-js');
+  const b64 = await page.evaluate(async () => {
+    const buf = await (await fetch(document.getElementById('dlLink').href)).arrayBuffer();
+    let s = ''; const u = new Uint8Array(buf); for (let i = 0; i < u.length; i++) s += String.fromCharCode(u[i]);
+    return btoa(s);
+  });
+  const img = jpeg.decode(Buffer.from(b64, 'base64'), { useTArray: true });
+  const qr = jsQR(new Uint8ClampedArray(img.data), img.width, img.height);
+  console.log('photo QR:', qr ? qr.data : 'NOT FOUND', '| expected cert', await text('#sSession'));
+}
 await page.screenshot({ path: '.tmp/photo-capture.png' });
 await page.click('#btnViewCert');
 await page.waitForFunction(() => /verdict (ok|bad)/.test(document.getElementById('verdict').className), null, { timeout: 60000 });
 console.log('photo cert:', await text('#certNo'), '|', await text('#cScene'), '|', await text('#cSegs'), '|', await text('#cWin'));
 console.log('photo verify:', await text('#verdict'));
+{ // scan the QR code on the certificate page
+  const { default: jsQR } = await import('jsqr');
+  const px = await page.evaluate(() => { const c = document.getElementById('certQr'); const d = c.getContext('2d').getImageData(0, 0, c.width, c.height); return { w: c.width, h: c.height, data: Array.from(d.data) }; });
+  const qr = jsQR(new Uint8ClampedArray(px.data), px.w, px.h);
+  console.log('cert QR:', qr ? qr.data : 'NOT FOUND');
+}
 await page.screenshot({ path: '.tmp/photo-cert.png', fullPage: true });
 await page.click('#btnTamper');
 await page.waitForFunction(() => /verdict bad/.test(document.getElementById('verdict').className), null, { timeout: 30000 });

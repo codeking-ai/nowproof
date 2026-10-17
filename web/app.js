@@ -1,6 +1,6 @@
 import {
   createPublicClient, http, keccak256, parseEventLogs, formatEther, encodeFunctionData,
-  privateKeyToAccount, generatePrivateKey, monadTestnet,
+  privateKeyToAccount, generatePrivateKey, monadTestnet, qrcode,
 } from './vendor.js';
 
 const RPC = 'https://testnet-rpc.monad.xyz';
@@ -35,6 +35,24 @@ const $ = id => document.getElementById(id);
 const short = (h, a = 6, b = 4) => h ? `${h.slice(0, a)}…${h.slice(-b)}` : '—';
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const certNo = id => `NP-${String(id).padStart(6, '0')}`;
+const certUrl = id => `${location.origin}${location.pathname}#/proof/${id}`;
+
+// "Scan to verify": the certificate link rendered as a QR code (cached per id and size).
+const qrCache = new Map();
+function qrCanvas(id, px) {
+  const k = `${id}:${px}`;
+  if (qrCache.has(k)) return qrCache.get(k);
+  const q = qrcode(0, 'M'); q.addData(certUrl(id)); q.make();
+  const n = q.getModuleCount(), quiet = 2, cell = Math.max(1, Math.floor(px / (n + quiet * 2)));
+  const size = cell * (n + quiet * 2);
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, size, size);
+  g.fillStyle = '#000';
+  for (let r = 0; r < n; r++) for (let col = 0; col < n; col++) if (q.isDark(r, col)) g.fillRect((col + quiet) * cell, (r + quiet) * cell, cell, cell);
+  qrCache.set(k, c);
+  return c;
+}
 function toast(msg, ms = 3000) {
   const t = $('toast'); t.textContent = msg; t.hidden = false;
   clearTimeout(toast._t); toast._t = setTimeout(() => (t.hidden = true), ms);
@@ -346,13 +364,21 @@ function draw(t) {
   }
   const now = new Date();
   const ts = now.toLocaleTimeString('zh-CN', { hour12: false }) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+  const qrId = rec?.id || (mode === 'photo' && prepared?.id);
+  let tx = W - pad;
+  if (qrId) {
+    const q = qrCanvas(qrId, Math.round(H * 0.2));
+    const qx = W - pad - q.width, qy = H - q.width - Math.round(pad * 0.5);
+    ctx.drawImage(q, qx, qy);
+    tx = qx - pad;
+  }
   ctx.textAlign = 'right';
   ctx.fillStyle = '#ecebf5'; ctx.font = `600 ${Math.round(band * 0.26)}px ui-monospace,Consolas,monospace`;
-  ctx.fillText(ts, W - pad, H - band + band * 0.45);
+  ctx.fillText(ts, tx, H - band + band * 0.45);
   ctx.fillStyle = '#9a98b3'; ctx.font = `500 ${Math.round(band * 0.2)}px system-ui`;
   const tagline = rec?.id ? `NowProof · ${certNo(rec.id)} · #${rec.seq}`
     : mode === 'photo' && prepared?.id ? `NowProof · ${certNo(prepared.id)}` : `NowProof · ${SCENES[scene].name}`;
-  ctx.fillText(tagline, W - pad, H - band + band * 0.8);
+  ctx.fillText(qrId ? `${tagline} · 扫码验真` : tagline, tx, H - band + band * 0.8);
   ctx.textAlign = 'left';
 
   if ($('chkChallenge').checked && challenge) {
@@ -602,10 +628,12 @@ async function openProof(arg) {
   const id = BigInt(arg);
   proof = null; verifyBlob = null; verifyBytes = null; results = [];
   $('certNo').textContent = certNo(id);
+  const q = qrCanvas(id, 132), cq = $('certQr');
+  cq.width = cq.height = q.width; cq.getContext('2d').drawImage(q, 0, 0);
   for (const k of ['cScene', 'cTime', 'cBlocks', 'cSegs', 'cWin', 'cOwner']) $(k).textContent = '—';
   setStatus('', '读取中');
   $('verdict').hidden = true; $('verdict').className = 'verdict'; $('vResult').hidden = true; $('timelineCard').hidden = true;
-  $('btnVerify').disabled = true; $('vbHint').textContent = '选择与本证书对应的视频文件';
+  $('btnVerify').disabled = true; $('vbHint').textContent = '选择与本证书对应的原始文件';
   try {
     const s = await pub.readContract({ address: cfg.address, abi, functionName: 'sessions', args: [id] });
     if (/^0x0+$/.test(s[0])) { setStatus('bad', '不存在'); return; }
