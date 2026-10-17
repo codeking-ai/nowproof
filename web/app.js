@@ -276,7 +276,7 @@ async function startCamera() {
       const stream = await openStream();
       video.srcObject = stream;
       await video.play().catch(() => {});
-      for (let i = 0; i < 40 && !video.videoWidth; i++) await sleep(50);
+      for (let i = 0; i < 120 && !video.videoWidth; i++) await sleep(50);   // USB webcams can take seconds to cold-start
       if (!video.videoWidth) throw Object.assign(new Error('no frames'), { name: 'NoFrames' });
       source = 'camera';
     } catch (e) {
